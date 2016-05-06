@@ -129,7 +129,7 @@ function term_records($term, $num_postings = '', $first_posting = '') {
 	$packet = implode("\n", array('I', $this->arm, 'I', $this->id, $this->seq, '', '', '', '', '', $this->db, $num_postings, $first_posting, '', $term));
 	$packet = strlen($packet) . "\n" . $packet;
 
-	$answer = $this->send($packet, true);
+	$answer = $this->send($packet);
 	if ($answer === false) return false;
 	
 	$this->error_code = $answer[10];

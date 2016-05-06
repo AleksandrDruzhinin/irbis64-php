@@ -2,7 +2,7 @@
 error_reporting(E_ALL);
 header('Content-Type: text/plain; charset=utf8');
 
-require('irbis64.class.php');
+include 'class.irbis64.php';
 
 $irbis = new irbis64(); 
 
@@ -48,7 +48,7 @@ if ($irbis->login()) {
 
 /* Пример получения записей по термину словаря  */
 	$irbis->set_db('IBIS');
-	$ret = $irbis->term_records("K=сказки", 0, 0);
+	$ret = $irbis->term_records("K=сказки", 0, 1);
 	if ($irbis->error_code != 0) echo $irbis->error() . PHP_EOL;
 	print_r($ret);
 //	echo implode(',', $ret);

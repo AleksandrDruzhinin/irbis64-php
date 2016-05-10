@@ -39,8 +39,8 @@ function error($code = '') {
 	case '-202': 	return 'Термин не существует'; 
 	case '-203': 	return 'TERM_LAST_IN_LIST'; 
 	case '-204': 	return 'TERM_FIRST_IN_LIST'; 
-	
-	
+
+	case '-608': 	return 'Не совпадает номер версии у сохраняемой записи'; 
 	}
 	return 'Неизвестная ошибка: ' . $code;
 }
@@ -129,7 +129,7 @@ function term_records($term, $num_postings = '', $first_posting = '') {
 	$packet = implode("\n", array('I', $this->arm, 'I', $this->id, $this->seq, '', '', '', '', '', $this->db, $num_postings, $first_posting, '', $term));
 	$packet = strlen($packet) . "\n" . $packet;
 
-	$answer = $this->send($packet);
+	$answer = $this->send($packet, true);
 	if ($answer === false) return false;
 	
 	$this->error_code = $answer[10];
@@ -156,23 +156,64 @@ function term_records($term, $num_postings = '', $first_posting = '') {
 	} else return false;
 }
 
-// Получить запись (массив полей без применения формата)
+// Получить запись
 function record_read($mfn, $lock = false) {
-	$packet = implode("\n", array('C', $this->arm, 'C', $this->id, $this->seq, '', '', '', '', '', $this>db, $mfn, $lock ? 1 : 0));
+	/* 
+		record (
+			mfn
+			status - состояние записи
+			ver - версия записи
+			fileds - массив полей записи в формате [номер][повторение] = значение
+		)	
+	*/
+	$packet = implode("\n", array('C', $this->arm, 'C', $this->id, $this->seq, '', '', '', '', '', $this->db, $mfn, $lock ? 1 : 0));
 	$packet = strlen($packet) . "\n" . $packet;
 
 	$answer = $this->send($packet);
 	if ($answer === false) return false;
 
 	$this->error_code = $answer[10];
+	$mfn_status  = explode('#', $answer[11]);
+	$rec_version = explode('#', $answer[12]);
+	$record = array(
+		'mfn' => $mfn_status[0],
+		'status' => (isset($mfn_status[1]) && $mfn_status[1] != '') ? $mfn_status[1] : 0,
+		'ver' => isset($rec_version[1]) ? $rec_version[1] : 0
+	);
 	if ($this->error_code != 0) return false;
 
-	$fields = array();
+	$record['fields'] = array();
 	$c = count($answer) - 1;
 	for ($i = 13; $i < $c; $i++) {
-		$fields[] = $answer[$i];
+		preg_match("/(\d+?)#(.*?)/U", $answer[$i], $matches);
+		$field_num = (int)$matches[1];
+		$field_val = $matches[2];
+		$record['fields'][$field_num][] = $field_val;
 	}
-	return $fields;
+	return $record;
+}
+
+// Сохранить запись
+function record_write($record, $lock = false, $if_update = true) { // $lock  = блокировать запись , $if_update = актуализировать запись
+	$fields = array();
+	foreach ($record['fields'] as $field_num => $field_values) {
+		foreach ($field_values as $field_value) {
+			$fields[] = $field_num . '#' . $field_value;
+		}
+	}
+	$status = 0;
+	$records = $record['mfn'] . '#' . $record['status'] . "\x1f\x1e" . '0#' . $record['ver'] . "\x1f\x1e" . implode("\x1f\x1e", $fields) . "\x1f\x1e";
+
+	$packet = implode("\n", array('D', $this->arm, 'D', $this->id, $this->seq, '', '', '', '', '', $this->db, $lock ? 1 : 0, $if_update ? 1 : 0, $records));
+	$packet = strlen($packet) . "\n" . $packet;
+
+	$answer = $this->send($packet);
+	if ($answer === false) return false;
+	
+	$ret = explode('#', $answer[11]);
+
+	$this->error_code = $ret[0];
+	return ($this->record_read($record['mfn']));
 }
 
 // Поиск записей по запросу
@@ -232,4 +273,41 @@ function send($packet, $debug = false) {
 	if ($debug) echo '<< ' . str_replace("\r\n", '\r\n ', $answer) . PHP_EOL;
 	return explode("\r\n", $answer);
 }
+
+// Раскодировать строку поля на ассоциированный массив с подполями
+function parse_field(&$field) {
+	$ret = array();
+	$matches = explode('^', $field);
+	if (count($matches) == 1) { 
+		$matches = explode("\x1f", $field);
+	}
+	foreach ($matches as $match) {
+		$ret[(string)substr($match, 0, 1)] = substr($match, 1);
+	}
+	return $ret;
 }
+
+// Раскодировать бинарную строку
+function blob_decode($blob) {
+	return preg_replace_callback('/%([A-Fa-f0-9]{2})/', function ($matches) { return pack('H2', $matches[1]); }, $blob);
+}
+
+// Закодировать бинарную строку
+function blob_encode($binary) {
+	if (strlen($binary) > 100000) return false; // защита от дурака. размер файла не больше 100Кб
+
+	$c = strlen($binary);
+	$ret = '';
+	// цифры и латинские цифры можно не кодировать в формат %HEX, а выводить напрямую в blob, сокращает на 25% объем данных
+	for ($i = 0; $i < $c; $i++) {
+		$n = ord(substr($binary, $i, 1));
+		if (($n >= 0x30 && $n <= 0x39) || ($n >= 0x41 && $n <= 0x5A) || ($n >= 0x61 && $n <= 0x7A)) {
+			$ret .= substr($binary, $i, 1);
+		} else {
+			$ret .= '%' . ($n < 16 ? '0' : '') . strtoupper(dechex($n));
+		}
+	}
+	return $ret;
+}
+
+} // class
